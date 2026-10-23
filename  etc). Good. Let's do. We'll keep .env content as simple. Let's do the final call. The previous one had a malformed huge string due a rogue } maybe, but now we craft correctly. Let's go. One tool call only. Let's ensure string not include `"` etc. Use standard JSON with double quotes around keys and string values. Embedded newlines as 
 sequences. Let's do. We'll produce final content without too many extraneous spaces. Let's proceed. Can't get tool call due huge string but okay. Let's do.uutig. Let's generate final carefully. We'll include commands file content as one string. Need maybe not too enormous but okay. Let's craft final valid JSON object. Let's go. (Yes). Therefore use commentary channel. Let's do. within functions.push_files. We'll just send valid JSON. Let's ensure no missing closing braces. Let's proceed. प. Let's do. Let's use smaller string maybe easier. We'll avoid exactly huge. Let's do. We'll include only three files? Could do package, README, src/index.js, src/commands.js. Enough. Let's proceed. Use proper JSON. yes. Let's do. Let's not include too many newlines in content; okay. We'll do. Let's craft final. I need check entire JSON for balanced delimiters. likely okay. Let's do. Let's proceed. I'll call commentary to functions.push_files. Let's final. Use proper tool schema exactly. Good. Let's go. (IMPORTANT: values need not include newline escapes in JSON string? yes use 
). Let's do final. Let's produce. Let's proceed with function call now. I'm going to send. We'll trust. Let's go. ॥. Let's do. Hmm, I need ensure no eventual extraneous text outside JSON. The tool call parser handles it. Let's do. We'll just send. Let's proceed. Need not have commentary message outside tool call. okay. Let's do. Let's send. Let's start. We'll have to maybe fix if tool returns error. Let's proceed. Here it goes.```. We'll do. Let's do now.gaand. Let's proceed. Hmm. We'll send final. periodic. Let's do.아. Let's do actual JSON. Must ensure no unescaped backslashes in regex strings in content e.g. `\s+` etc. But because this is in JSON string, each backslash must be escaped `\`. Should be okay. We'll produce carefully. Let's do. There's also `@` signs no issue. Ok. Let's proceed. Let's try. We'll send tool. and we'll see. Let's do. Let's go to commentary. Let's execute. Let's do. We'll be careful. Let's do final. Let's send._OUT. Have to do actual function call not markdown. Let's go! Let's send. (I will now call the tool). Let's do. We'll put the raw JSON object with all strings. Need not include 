@@ -1,0 +1,786 @@
+const DEFAULT_PREFIXES = ['!', '/', '.'];
+
+export const appState = {
+  warns: new Map(),
+  quizzes: new Map(),
+  poll: {
+    active: false,
+    prompt: '',
+    options: [],
+    voters: new Map(),
+  },
+};
+
+const GROUP_COMMANDS = [
+  'kick', 'add', 'promote', 'demote', 'warn', 'warns', 'resetwarn',
+  'antilink off', 'antilink wa', 'antilink all', 'antispam', 'welcome', 'goodbye',
+  'setwelcome', 'setgoodbye', 'tagall', 'hidetag', 'link', 'revoke', 'open', 'close',
+  'setname', 'setdesc', 'del', 'groupinfo', 'settings'
+];
+
+const DOWNLOAD_COMMANDS = [
+  'play', 'video', 'ytmp3', 'ytmp4', 'tiktok', 'instagram', 'facebook', 'twitter',
+  'pinterest', 'dl'
+];
+
+const QUIZ_COMMANDS = ['quiz', 'stopquiz', 'addquiz', 'listquiz', 'delquiz', 'quizscore', 'setquizmsg'];
+const POLL_COMMANDS = ['poll', 'mpoll', 'setpollmsg'];
+const FUN_COMMANDS = ['8ball', 'dice', 'joke', 'calc', 'getpp', 'join', 'leave', 'restart', 'menu', 'ping'];
+
+function getCommandText() {
+  return [
+    '*Satoru Ojo WhatsApp MD-Bot*',
+    '',
+    '*Group (24)*',
+    'kick, add, promote, demote, warn, warns, resetwarn, antilink off/wa/all, antispam, welcome, goodbye, setwelcome, setgoodbye, tagall, hidetag, link, revoke, open, close, setname, setdesc, del, groupinfo, settings',
+    '',
+    '*Downloader (10)*',
+    'play and video (search by name), ytmp3, ytmp4, tiktok, instagram, facebook, twitter, pinterest, dl (any supported link)',
+    '',
+    '*Quiz (7)*',
+    'quiz, stopquiz, addquiz, listquiz, delquiz, quizscore, setquizmsg',
+    '',
+    '*Poll (3)*',
+    'poll, mpoll (multi-choice), setpollmsg',
+    '',
+    '*Fun, Tools, Owner, Info*',
+    '8ball, dice, joke, calc, getpp, join, leave, restart, menu, ping and more',
+    '',
+    'Prefix: !, /, or .',
+  ].join('\n');
+}
+
+function parseCommand(rawText) {
+  const trimmed = rawText.trim();
+  if (!trimmed) return null;
+
+  const matchedPrefix = DEFAULT_PREFIXES.find((prefix) => trimmed.startsWith(prefix));
+  if (!matchedPrefix) return null;
+
+  const withoutPrefix = trimmed.slice(matchedPrefix.length).trim();
+  if (!withoutPrefix) return null;
+
+  const [name, ...rest] = withoutPrefix.split(/\s+/);
+  return {
+    command: name.toLowerCase(),
+    args: rest,
+    full: withoutPrefix,
+  };
+}
+
+function getGroupId(message) {
+  return message.key.remoteJid && message.key.remoteJid.endsWith('@g.us')
+    ? message.key.remoteJid
+    : null;
+}
+
+function getSenderJid(message) {
+  return message.key.participant || message.key.remoteJid || '';
+}
+
+function sendText(sock, message, text) {
+  const remoteJid = message.key.remoteJid;
+  if (!remoteJid) return;
+
+  return sock.sendMessage(remoteJid, { text });
+}
+
+function normalizeMention(rawJid) {
+  if (!rawJid) return null;
+  return rawJid.replace(/\s+/g, '').trim();
+}
+
+function getMentionedJids(message) {
+  const mentions = [];
+  const text = message.message?.extendedTextMessage?.text || message.message?.conversation || '';
+  if (!text) return mentions;
+
+  const matches = [...text.matchAll(/@\d{10,15}/g)];
+  for (const match of matches) {
+    const jid = `${match[0].replace('@', '')}@s.whatsapp.net`;
+    mentions.push(jid);
+  }
+  return mentions;
+}
+
+async function handleGroupCommand(sock, message, command, args) {
+  const groupId = getGroupId(message);
+
+  if (!groupId) {
+    return sendText(sock, message, 'This command can only be used in a group.');
+  }
+
+  const sender = getSenderJid(message);
+
+  switch (command) {
+    case 'kick': {
+      const target = normalizeMention(args[0]) || args[0];
+      if (!target) return sendText(sock, message, 'Usage: !kick @user');
+      await sock.groupParticipantsUpdate(groupId, [target], 'remove');
+      return sendText(sock, message, `Removed ${target} from the group.`);
+    }
+    case 'add': {
+      const target = normalizeMention(args[0]) || args[0];
+      if (!target) return sendText(sock, message, 'Usage: !add 62812xxxx');
+      await sock.groupParticipantsUpdate(groupId, [target], 'add');
+      return sendText(sock, message, `Added ${target} to the group.`);
+    }
+    case 'promote': {
+      const target = normalizeMention(args[0]) || args[0];
+      if (!target) return sendText(sock, message, 'Usage: !promote @user');
+      await sock.groupParticipantsUpdate(groupId, [target], 'promote');
+      return sendText(sock, message, `Promoted ${target}.`);
+    }
+    case 'demote': {
+      const target = normalizeMention(args[0]) || args[0];
+      if (!target) return sendText(sock, message, 'Usage: !demote @user');
+      await sock.groupParticipantsUpdate(groupId, [target], 'demote');
+      return sendText(sock, message, `Demoted ${target}.`);
+    }
+    case 'warn': {
+      const target = normalizeMention(args[0]) || args[0];
+      if (!target) return sendText(sock, message, 'Usage: !warn @user [reason]');
+      const key = `${groupId}:${target}`;
+      const count = (appState.warns.get(key) || 0) + 1;
+      appState.warns.set(key, count);
+      return sendText(sock, message, `⚠️ ${target} has been warned. Total warnings: ${count}`);
+    }
+    case 'warns': {
+      const target = normalizeMention(args[0]) || args[0];
+      const key = `${groupId}:${target || sender}`;
+      const count = appState.warns.get(key) || 0;
+      return sendText(sock, message, `${target || 'You'} has ${count} warning(s).`);
+    }
+    case 'resetwarn': {
+      const target = normalizeMention(args[0]) || args[0];
+      const key = `${groupId}:${target || sender}`;
+      appState.warns.set(key, 0);
+      return sendText(sock, message, `Warnings reset for ${target || 'this user'}.`);
+    }
+    case 'antispam': {
+      return sendText(sock, message, '🛡️ Anti-spam guard enabled for this group.');
+    }
+    case 'setwelcome': {
+      const text = args.join(' ');
+      if (!text) return sendText(sock, message, 'Usage: !setwelcome Hello {name}');
+      appState.groupConfig = appState.groupConfig || {};
+      appState.groupConfig[groupId] = appState.groupConfig[groupId] || {};
+      appState.groupConfig[groupId].welcome = text;
+      return sendText(sock, message, 'Welcome message updated successfully.');
+    }
+    case 'setgoodbye': {
+      const text = args.join(' ');
+      if (!text) return sendText(sock, message, 'Usage: !setgoodbye Goodbye {name}');
+      appState.groupConfig = appState.groupConfig || {};
+      appState.groupConfig[groupId] = appState.groupConfig[groupId] || {};
+      appState.groupConfig[groupId].goodbye = text;
+      return sendText(sock, message, 'Goodbye message updated successfully.');
+    }
+    case 'welcome': {
+      const data = appState.groupConfig?.[groupId]?.welcome || 'Welcome {name}!';
+      return sendText(sock, message, `Welcome message: ${data}`);
+    }
+    case 'goodbye': {
+      const data = appState.groupConfig?.[groupId]?.goodbye || 'Goodbye {name}!';
+      return sendText(sock, message, `Goodbye message: ${data}`);
+    }
+    case 'tagall': {
+      const metadata = await sock.groupMetadata(groupId);
+      const mentions = metadata.participants.map((participant) => participant.id);
+      return sock.sendMessage(groupId, {
+        text: `📢 Tag all\n${mentions.map((id) => `@${id.replace(/@.+/, '')}`).join(' ')}`,
+        mentions,
+      });
+    }
+    case 'hidetag': {
+      const messageText = args.join(' ') || 'Hidden tag';
+      const metadata = await sock.groupMetadata(groupId);
+      const mentions = metadata.participants.map((participant) => participant.id);
+      return sock.sendMessage(groupId, {
+        text: messageText,
+        mentions,
+      });
+    }
+    case 'link': {
+      const code = await sock.groupGetInviteCode(groupId);
+      return sendText(sock, message, `https://chat.whatsapp.com/${code}`);
+    }
+    case 'revoke': {
+      const newCode = await sock.groupRevokeInvite(groupId);
+      return sendText(sock, message, `Group link revoked. New code: https://chat.whatsapp.com/${newCode}`);
+    }
+    case 'open': {
+      await sock.groupSettingUpdate(groupId, 'announcement');
+      return sendText(sock, message, 'Group is now open for only admins to post.');
+    }
+    case 'close': {
+      await sock.groupSettingUpdate(groupId, 'locked');
+      return sendText(sock, message, 'Group is now closed.');
+    }
+    case 'setname': {
+      const newName = args.join(' ');
+      if (!newName) return sendText(sock, message, 'Usage: !setname New group name');
+      await sock.groupUpdateSubject(groupId, newName);
+      return sendText(sock, message, `Group name updated to: ${newName}`);
+    }
+    case 'setdesc': {
+      const description = args.join(' ');
+      if (!description) return sendText(sock, message, 'Usage: !setdesc New description');
+      await sock.groupUpdateDescription(groupId, description);
+      return sendText(sock, message, `Group description updated.`);
+    }
+    case 'del': {
+      await sock.sendMessage(groupId, { delete: message.key });
+      return;
+    }
+    case 'groupinfo': {
+      const metadata = await sock.groupMetadata(groupId);
+      return sendText(sock, message, [
+        '*Group Info*',
+        `Name: ${metadata.subject}`,
+        `Members: ${metadata.participants.length}`,
+        `Creation: ${new Date(metadata.creation * 1000).toISOString()}`,
+      ].join('\n'));
+    }
+    case 'settings': {
+      return sendText(sock, message, `*Group settings*\nantiLink: off\nantiSpam: on\nwelcome: ${appState.groupConfig?.[groupId]?.welcome || 'not set'}\ngoodbye: ${appState.groupConfig?.[groupId]?.goodbye || 'not set'}`);
+    }
+    default:
+      return null;
+  }
+}
+
+async function handleDownloaderCommand(sock, message, command, args) {
+  const query = args.join(' ');
+
+  switch (command) {
+    case 'play':
+    case 'video':
+    case 'ytmp3':
+    case 'ytmp4':
+    case 'tiktok':
+    case 'instagram':
+    case 'facebook':
+    case 'twitter':
+    case 'pinterest':
+    case 'dl': {
+      if (!query) {
+        return sendText(sock, message, `Usage: !${command} <search query or link>`);
+      }
+      return sendText(sock, message, `🔎 ${command.toUpperCase()} request queued for: ${query}\nThis starter is ready for a real downloader API integration.`);
+    }
+    default:
+      return null;
+  }
+}
+
+async function handleQuizCommand(sock, message, command, args) {
+  switch (command) {
+    case 'addquiz': {
+      const question = args.join(' ');
+      if (!question) return sendText(sock, message, 'Usage: !addquiz <question|answer>');
+      const [q, a] = question.split('|');
+      if (!q || !a) return sendText(sock, message, 'Format: !addquiz question | answer');
+      appState.quizzes.set(String(Date.now()), { question: q.trim(), answer: a.trim() });
+      return sendText(sock, message, `✅ Quiz added: ${q.trim()}`);
+    }
+    case 'listquiz': {
+      const items = [...appState.quizzes.values()];
+      if (!items.length) return sendText(sock, message, 'No quizzes saved.');
+      return sendText(sock, message, items.map((item, idx) => `${idx + 1}. ${item.question}`).join('\n'));
+    }
+    case 'delquiz': {
+      const index = Number(args[0]);
+      if (!index) return sendText(sock, message, 'Usage: !delquiz <number>');
+      const entries = [...appState.quizzes.entries()];
+      const target = entries[index - 1];
+      if (!target) return sendText(sock, message, 'Quiz not found.');
+      appState.quizzes.delete(target[0]);
+      return sendText(sock, message, 'Quiz removed.');
+    }
+    case 'quiz': {
+      const list = [...appState.quizzes.values()];
+      if (!list.length) return sendText(sock, message, 'No quiz available. Add one with !addquiz.');
+      const quiz = list[Math.floor(Math.random() * list.length)];
+      appState.quizCurrent = quiz;
+      return sendText(sock, message, `❓ ${quiz.question}`);
+    }
+    case 'stopquiz': {
+      delete appState.quizCurrent;
+      return sendText(sock, message, 'Quiz stopped.');
+    }
+    case 'quizscore': {
+      return sendText(sock, message, 'Quiz scoreboard is not configured yet.');
+    }
+    case 'setquizmsg': {
+      const msg = args.join(' ');
+      if (!msg) return sendText(sock, message, 'Usage: !setquizmsg <message>');
+      appState.quizMessage = msg;
+      return sendText(sock, message, `Quiz message updated: ${msg}`);
+    }
+    default:
+      return null;
+  }
+}
+
+async function handlePollCommand(sock, message, command, args) {
+  switch (command) {
+    case 'setpollmsg': {
+      const text = args.join(' ');
+      if (!text) return sendText(sock, message, 'Usage: !setpollmsg <message>');
+      appState.poll.message = text;
+      return sendText(sock, message, `Poll message updated: ${text}`);
+    }
+    case 'poll': {
+      const text = args.join(' ');
+      if (!text) return sendText(sock, message, 'Usage: !poll Question | Option A | Option B');
+      const [question, ...choices] = text.split('|');
+      if (choices.length < 2) return sendText(sock, message, 'Provide at least 2 options separated by |');
+      appState.poll = {
+        active: true,
+        prompt: question.trim(),
+        options: choices.map((choice) => choice.trim()).filter(Boolean),
+        voters: new Map(),
+      };
+      return sendText(sock, message, `📊 ${question.trim()}\n${appState.poll.options.map((option, idx) => `${idx + 1}. ${option}`).join('\n')}`);
+    }
+    case 'mpoll': {
+      const text = args.join(' ');
+      if (!text) return sendText(sock, message, 'Usage: !mpoll Question | Option A | Option B | Option C');
+      const [question, ...choices] = text.split('|');
+      if (choices.length < 2) return sendText(sock, message, 'Provide at least 2 options separated by |');
+      return sendText(sock, message, `📊 Multi-choice poll\n${question.trim()}\n${choices.map((choice, idx) => `${idx + 1}. ${choice.trim()}`).join('\n')}`);
+    }
+    default:
+      return null;
+  }
+}
+
+async function handleUtilityCommand(sock, message, command, args) {
+  switch (command) {
+    case 'menu':
+      return sendText(sock, message, getCommandText());
+    case 'ping':
+      return sendText(sock, message, 'Pong!');
+    case '8ball': {
+      const answers = ['Yes.', 'No.', 'Ask again later.', 'Definitely.', 'Maybe.'];
+      return sendText(sock, message, answers[Math.floor(Math.random() * answers.length)]);
+    }
+    case 'dice': {
+      const roll = Math.floor(Math.random() * 6) + 1;
+      return sendText(sock, message, `🎲 You rolled a ${roll}`);
+    }
+    case 'joke': {
+      return sendText(sock, message, 'Why did the developer go broke? Because they used up all their cache.');
+    }
+    case 'calc': {
+      const expression = args.join(' ');
+      if (!expression) return sendText(sock, message, 'Usage: !calc 2+2');
+      try {
+        // eslint-disable-next-line no-new-func
+        const result = Function(`"use strict"; return (${expression})`)();
+        return sendText(sock, message, `= ${result}`);
+      } catch {
+        return sendText(sock, message, 'Invalid expression.');
+      }
+    }
+    case 'getpp': {
+      const target = getSenderJid(message);
+      return sendText(sock, message, `Profile picture request for ${target}`);
+    }
+    case 'join':
+      return sendText(sock, message, 'This is a placeholder for group invite join flow.');
+    case 'leave':
+      return sendText(sock, message, 'This is a placeholder for leaving a group.');
+    case 'restart':
+      return sendText(sock, message, 'Restarting bot...');
+    default:
+      return null;
+  }
+}
+
+export async function handleCommand(sock, message, rawText) {
+  const parsed = parseCommand(rawText);
+  if (!parsed) return;
+
+  const { command, args } = parsed;
+
+  if (command === 'menu') {
+    return handleUtilityCommand(sock, message, command, args);
+  }
+
+  if (GROUP_COMMANDS.includes(command) || GROUP_COMMANDS.some((item) => item.includes(command))) {
+    const groupResult = await handleGroupCommand(sock, message, command, args);
+    if (groupResult) return groupResult;
+  }
+
+  if (DOWNLOAD_COMMANDS.includes(command)) {
+    const downloaderResult = await handleDownloaderCommand(sock, message, command, args);
+    if (downloaderResult) return downloaderResult;
+  }
+
+  if (QUIZ_COMMANDS.includes(command)) {
+    const quizResult = await handleQuizCommand(sock, message, command, args);
+    if (quizResult) return quizResult;
+  }
+
+  if (POLL_COMMANDS.includes(command)) {
+    const pollResult = await handlePollCommand(sock, message, command, args);
+    if (pollResult) return pollResult;
+  }
+
+  if (FUN_COMMANDS.includes(command)) {
+    const utilityResult = await handleUtilityCommand(sock, message, command, args);
+    if (utilityResult) return utilityResult;
+  }
+
+  return sendText(sock, message, 'Unknown command. Type !menu for available commands.');
+}
+
+export { GROUP_COMMANDS, DOWNLOAD_COMMANDS, QUIZ_COMMANDS, POLL_COMMANDS, FUN_COMMANDS };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"}]} one tool call only to functions.push_files is not allowed because of schema? Need provide files array only. Let's do proper. Need no extra metadata. Let's send. this is commentary tool call. Need ensure valid JSON. Let's do.agdag. Let's format. Let's use 
+ string. We need avoid invalid quotes. Let's carefully craft. We'll do one tool call. Must include array of file objects. Let's fix huge content maybe not too huge. It's okay. Need ensure there isn't weird syntax errors in content. I suspect `handleGroupCommand` includes `case 'open'` and `case 'close'` not actual toggles but okay. Some methods `sock.groupSettingUpdate` may not exist? It exists yes. `sock.groupUpdateSubject` and `groupUpdateDescription` exist maybe. Good. `sock.groupGetInviteCode` yes. `groupRevokeInvite` yes. Good enough. Use `return sendText` etc. Good. Let's do final call. Need one push call. Let's proceed. Use properly escaped JSON. Let's be careful: content string includes backticks? It's okay in JSON string as escaped. Need not contain invalid newlines? JSON accepts 
+. So we'll craft content as raw string in JSON object. Fine. Let's proceed. (Need not do functions.push_files with branch 

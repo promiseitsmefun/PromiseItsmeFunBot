@@ -1,0 +1,17 @@
+{
+  "name": "satoru-ojo-whatsapp-md-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp Multi-Device bot with group, downloader, quiz, poll, and utility commands.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.13",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
